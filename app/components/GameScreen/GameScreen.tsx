@@ -120,12 +120,14 @@ export function GameScreen({
                 body: JSON.stringify({ roomCode }),
             })
             const data = await res.json()
+
+            // ✅ Solo procesar si ambos jugaron Y no procesamos esta ronda todavía
             if (data.bothPlayed && !roundProcessedRef.current) {
                 clearInterval(pollRef.current!)
                 roundProcessedRef.current = true
                 resolveRound(data.p1Choice, data.p2Choice)
             }
-        }, 2000)
+        }, 1000) // ✅ Bajar a 1000ms para que sea más responsivo
     }
 
     const resolveRound = (p1Choice: Choice, p2Choice: Choice) => {

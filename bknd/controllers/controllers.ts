@@ -370,51 +370,43 @@ export async function Plays(req: Request) {
                 { status: 404 }
             )
 
-        // Asignar jugada según quién sea el jugador
+        // ✅ Si AMBOS choices están llenos, significa que es inicio de ronda nueva
+        // Limpiar antes de escribir la nueva jugada
+        if (room.p1Choice !== null && room.p2Choice !== null) {
+            room.p1Choice = null
+            room.p2Choice = null
+        }
+
         if (room.player1Id === userId) room.p1Choice = choice
         else if (room.player2Id === userId) room.p2Choice = choice
 
         await room.save()
-
-        // Si ambos eligieron, devolvemos un flag para que el front sepa que puede comparar
-        const bothPlayed = room.p1Choice !== null && room.p2Choice !== null
-        return NextResponse.json({ success: true, bothPlayed, room })
+        return NextResponse.json({ success: true })
     } catch (error) {
         return NextResponse.json({ error: 'Error en jugada' }, { status: 500 })
     }
 }
-
 // 2. api/game/wichWins -> Procesar resultado de la ronda y sumar puntos
 // (Se llama cuando ambos jugaron)
 export async function WichWins(req: Request) {
     const { roomCode } = await req.json()
     const room = await Rooms.findOne({ where: { roomCode } })
 
-    if (!room || !room.p1Choice || !room.p2Choice) {
-        return NextResponse.json({ bothPlayed: false, room })
+    if (!room) {
+        return NextResponse.json({ bothPlayed: false })
     }
 
-    const p1Choice = room.p1Choice
-    const p2Choice = room.p2Choice
+    // Ambos eligieron: devolver resultado SIN limpiar
+    if (room.p1Choice && room.p2Choice) {
+        return NextResponse.json({
+            bothPlayed: true,
+            p1Choice: room.p1Choice,
+            p2Choice: room.p2Choice,
+        })
+    }
 
-    // ⏳ No borramos todavía, solo devolvemos las choices.
-    // Las borraremos después de un breve tiempo (2 segundos)
-    // para que el otro jugador tenga oportunidad de leerlas.
-    setTimeout(async () => {
-        const stillRoom = await Rooms.findOne({ where: { roomCode } })
-        if (
-            stillRoom &&
-            stillRoom.p1Choice === p1Choice &&
-            stillRoom.p2Choice === p2Choice
-        ) {
-            // Solo borramos si nadie ha hecho una nueva jugada en el medio
-            stillRoom.p1Choice = null
-            stillRoom.p2Choice = null
-            await stillRoom.save()
-        }
-    }, 2000)
-
-    return NextResponse.json({ bothPlayed: true, p1Choice, p2Choice, room })
+    // Uno o ninguno eligió todavía
+    return NextResponse.json({ bothPlayed: false })
 }
 
 // 3. api/game/endingTheRoom -> Sumar victoria y destruir sala
