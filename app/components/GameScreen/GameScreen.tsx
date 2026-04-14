@@ -4,277 +4,564 @@ import { useState, useEffect, useRef } from 'react'
 
 type Choice = 'rock' | 'paper' | 'scissors' | null
 
-const choices: Choice[] = ['rock', 'paper', 'scissors']
-
-const getWinner = (user: Choice, computer: Choice): 'user' | 'computer' | 'draw' => {
-  if (user === computer) return 'draw'
-  if (
-    (user === 'rock' && computer === 'scissors') ||
-    (user === 'paper' && computer === 'rock') ||
-    (user === 'scissors' && computer === 'paper')
-  ) {
-    return 'user'
-  }
-  return 'computer'
+const getWinner = (p1: Choice, p2: Choice): 1 | 2 | 0 => {
+    if (p1 === p2) return 0
+    if (
+        (p1 === 'rock' && p2 === 'scissors') ||
+        (p1 === 'paper' && p2 === 'rock') ||
+        (p1 === 'scissors' && p2 === 'paper')
+    )
+        return 1
+    return 2
 }
 
-const choiceNames = {
-  rock: 'PIEDRA',
-  paper: 'PAPEL',
-  scissors: 'TIJERA',
+const choiceNames: Record<string, string> = {
+    rock: 'PIEDRA',
+    paper: 'PAPEL',
+    scissors: 'TIJERA',
 }
 
 interface GameScreenProps {
-  roomCode?: string
-  username?: string
+    roomCode: string
+    player1Name: string
+    player2Name: string
+    currentUserId: number
+    player1Id: number
+    player2Id: number | null
 }
 
-export function GameScreen({ roomCode = 'SALA-123', username = 'Jugador' }: GameScreenProps) {
-  const [selectedChoice, setSelectedChoice] = useState<Choice>(null)
-  const [userScore, setUserScore] = useState(0)
-  const [computerScore, setComputerScore] = useState(0)
-  const [resultMessage, setResultMessage] = useState('')
-  const [timer, setTimer] = useState(10)
-  const [isWaiting, setIsWaiting] = useState(true)
-  const [gameOver, setGameOver] = useState(false)
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+export function GameScreen({
+    roomCode,
+    player1Name,
+    player2Name,
+    currentUserId,
+    player1Id,
+    player2Id,
+}: GameScreenProps) {
+    const isPlayer1 = currentUserId === player1Id
+    const myName = isPlayer1 ? player1Name : player2Name
+    const opponentName = isPlayer1 ? player2Name : player1Name
 
-  // Limpiar intervalo al desmontar
-  useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [])
+    const [selectedChoice, setSelectedChoice] = useState<Choice>(null)
+    const [myScore, setMyScore] = useState(0)
+    const [opponentScore, setOpponentScore] = useState(0)
+    const [resultMessage, setResultMessage] = useState('')
+    const [timer, setTimer] = useState(10)
+    const [waitingForOpponent, setWaitingForOpponent] = useState(false)
+    const [gameOver, setGameOver] = useState(false)
+    const [iWon, setIWon] = useState(false)
 
-  // Iniciar contador cuando isWaiting es true y el juego no ha terminado
-  useEffect(() => {
-    if (!isWaiting || gameOver) return
-    if (timer === 0) {
-      // Tiempo agotado sin elegir: punto para la computadora
-      if (intervalRef.current) clearInterval(intervalRef.current)
-      const newComputerScore = computerScore + 1
-      setComputerScore(newComputerScore)
-      setResultMessage('⏱️ Perdiste por tiempo')
-      setSelectedChoice(null)
-      // Verificar si el juego terminó por llegar a 30
-      if (newComputerScore >= 30) {
-        setGameOver(true)
-        setIsWaiting(false)
+    const intervalRef = useRef<NodeJS.Timeout | null>(null)
+    const pollRef = useRef<NodeJS.Timeout | null>(null)
+    const hasPlayedRef = useRef(false)
+    const roundProcessedRef = useRef(false)
+
+    const myScoreRef = useRef(0)
+    const oppScoreRef = useRef(0)
+
+    useEffect(() => {
+        myScoreRef.current = myScore
+    }, [myScore])
+
+    useEffect(() => {
+        oppScoreRef.current = opponentScore
+    }, [opponentScore])
+
+    useEffect(() => {
+        return () => {
+            if (intervalRef.current) clearInterval(intervalRef.current)
+            if (pollRef.current) clearInterval(pollRef.current)
+        }
+    }, [])
+
+    // Contador de tiempo
+    useEffect(() => {
+        if (waitingForOpponent || gameOver) return
+        if (timer === 0) {
+            if (intervalRef.current) clearInterval(intervalRef.current)
+            if (!hasPlayedRef.current) {
+                submitChoice(null)
+            }
+            return
+        }
+
+        intervalRef.current = setInterval(() => {
+            setTimer((prev) => prev - 1)
+        }, 1000)
+
+        return () => {
+            if (intervalRef.current) clearInterval(intervalRef.current)
+        }
+    }, [timer, waitingForOpponent, gameOver])
+
+    const submitChoice = async (choice: Choice) => {
+        hasPlayedRef.current = true
         if (intervalRef.current) clearInterval(intervalRef.current)
-        return
-      }
-      // Reiniciar ronda (resetea timer y sigue esperando)
-      setTimer(10)
-      return
+
+        setSelectedChoice(choice)
+        setWaitingForOpponent(true)
+        setResultMessage('⏳ Esperando al oponente...')
+
+        await fetch('/api/game/plays', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomCode, userId: currentUserId, choice }),
+        })
+
+        startPolling()
     }
 
-    intervalRef.current = setInterval(() => {
-      setTimer((prev) => prev - 1)
-    }, 1000)
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [timer, isWaiting, gameOver, computerScore])
-
-  const handleChoice = (choice: Choice) => {
-    if (!choice || !isWaiting || gameOver) return
-
-    // Detener el contador
-    if (intervalRef.current) clearInterval(intervalRef.current)
-
-    const computer = choices[Math.floor(Math.random() * 3)]
-    const winner = getWinner(choice, computer)
-    setSelectedChoice(choice)
-
-    let newUserScore = userScore
-    let newComputerScore = computerScore
-    let message = ''
-
-    if (winner === 'user') {
-      newUserScore = userScore + 1
-      message = `¡Ganaste! ${choiceNames[choice]} vence a ${choiceNames[computer!]}`
-    } else if (winner === 'computer') {
-      newComputerScore = computerScore + 1
-      message = `Perdiste... ${choiceNames[computer!]} vence a ${choiceNames[choice]}`
-    } else {
-      message = `Empate. Ambos eligieron ${choiceNames[choice]}`
+    const startPolling = () => {
+        if (pollRef.current) clearInterval(pollRef.current)
+        pollRef.current = setInterval(async () => {
+            const res = await fetch('/api/game/wichWins', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ roomCode }),
+            })
+            const data = await res.json()
+            if (data.bothPlayed && !roundProcessedRef.current) {
+                clearInterval(pollRef.current!)
+                roundProcessedRef.current = true
+                resolveRound(data.p1Choice, data.p2Choice)
+            }
+        }, 2000)
     }
 
-    setUserScore(newUserScore)
-    setComputerScore(newComputerScore)
-    setResultMessage(message)
+    const resolveRound = (p1Choice: Choice, p2Choice: Choice) => {
+        const myChoice = isPlayer1 ? p1Choice : p2Choice
+        const oppChoice = isPlayer1 ? p2Choice : p1Choice
+        const roundWinner = getWinner(p1Choice, p2Choice)
 
-    // Verificar si alguien llegó a 30
-    if (newUserScore >= 30 || newComputerScore >= 30) {
-      setGameOver(true)
-      setIsWaiting(false)
-      return
+        let newMyScore = myScoreRef.current
+        let newOppScore = oppScoreRef.current
+        let message = ''
+
+        if (roundWinner === 0) {
+            message = `Empate. Ambos eligieron ${choiceNames[myChoice ?? 'rock']}`
+        } else if (
+            (roundWinner === 1 && isPlayer1) ||
+            (roundWinner === 2 && !isPlayer1)
+        ) {
+            newMyScore += 1
+            message = `¡Ganaste la ronda! ${choiceNames[myChoice ?? 'rock']} vence a ${choiceNames[oppChoice ?? 'rock']}`
+        } else {
+            newOppScore += 1
+            message = `Perdiste la ronda... ${choiceNames[oppChoice ?? 'rock']} vence a ${choiceNames[myChoice ?? 'rock']}`
+        }
+
+        setMyScore(newMyScore)
+        setOpponentScore(newOppScore)
+        setResultMessage(message)
+
+        if (newMyScore >= 30 || newOppScore >= 30) {
+            const winnerId =
+                newMyScore >= 30
+                    ? currentUserId
+                    : isPlayer1
+                      ? player2Id!
+                      : player1Id
+            setIWon(newMyScore >= 30)
+            setGameOver(true)
+            setWaitingForOpponent(false)
+            endGame(winnerId)
+            return
+        }
+
+        // Preparar siguiente ronda
+        hasPlayedRef.current = false
+        roundProcessedRef.current = false
+        setSelectedChoice(null)
+        setWaitingForOpponent(false)
+        setTimer(10)
     }
 
-    // Preparar siguiente ronda
-    setSelectedChoice(null)
-    setTimer(10)
-    // isWaiting sigue true, el contador se reinicia automáticamente
-  }
+    const endGame = async (winnerId: number) => {
+        await fetch('/api/game/endingTheRoom', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomCode, winnerId }),
+        })
+    }
 
-  const resetGame = () => {
-    if (intervalRef.current) clearInterval(intervalRef.current)
-    setSelectedChoice(null)
-    setUserScore(0)
-    setComputerScore(0)
-    setResultMessage('')
-    setTimer(10)
-    setIsWaiting(true)
-    setGameOver(false)
-  }
+    const handleChoice = (choice: Choice) => {
+        if (!choice || waitingForOpponent || gameOver || hasPlayedRef.current)
+            return
+        submitChoice(choice)
+    }
 
-  return (
-    <div className="relative w-full max-w-sm md:max-w-2xl lg:max-w-3xl bg-black rounded-3xl shadow-2xl overflow-hidden transition-all duration-300"
-      style={{ minHeight: '568px', height: 'auto' }}
-    >
-      {/* Overlay de fin de juego */}
-      {gameOver && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/70 z-50">
-          <div
-            className={`rounded-2xl p-8 text-center shadow-2xl backdrop-blur-md ${
-              userScore >= 30 ? 'bg-green-500/80' : 'bg-red-500/80'
-            }`}
-          >
-            <div className="text-6xl mb-4">{userScore >= 30 ? '⭐' : '❌'}</div>
-            <h2 className="text-3xl font-bold text-white mb-2">
-              {userScore >= 30 ? '¡GANASTE!' : 'PERDISTE'}
-            </h2>
-            <p className="text-white text-lg mb-4">
-              TÚ: {userScore} | CPU: {computerScore}
-            </p>
-            <button
-              onClick={resetGame}
-              className="px-6 py-2 bg-white text-gray-900 font-bold rounded-full hover:scale-105 transition"
+    const resetGame = () => {
+        if (intervalRef.current) clearInterval(intervalRef.current)
+        if (pollRef.current) clearInterval(pollRef.current)
+        setSelectedChoice(null)
+        setMyScore(0)
+        setOpponentScore(0)
+        myScoreRef.current = 0
+        oppScoreRef.current = 0
+        setResultMessage('')
+        setTimer(10)
+        setWaitingForOpponent(false)
+        setGameOver(false)
+        setIWon(false)
+        hasPlayedRef.current = false
+        roundProcessedRef.current = false
+    }
+
+    const canPlay = !waitingForOpponent && !gameOver
+
+    return (
+        <div
+            className="relative w-full max-w-sm mx-auto md:max-w-md lg:max-w-md bg-black rounded-3xl shadow-2xl overflow-hidden"
+            style={{ minHeight: '568px', height: 'auto' }}
+        >
+            {/* Overlay de fin de juego */}
+            {gameOver && (
+                <div className="fixed inset-0 flex items-center justify-center bg-black/70 z-50">
+                    <div
+                        className={`rounded-2xl p-8 text-center shadow-2xl backdrop-blur-md ${
+                            iWon ? 'bg-green-500/80' : 'bg-red-500/80'
+                        }`}
+                    >
+                        <div className="text-6xl mb-4">
+                            {iWon ? '⭐' : '❌'}
+                        </div>
+                        <h2 className="text-3xl font-bold text-white mb-2">
+                            {iWon ? '¡GANASTE!' : 'PERDISTE'}
+                        </h2>
+                        <p className="text-white text-lg mb-4">
+                            {myName}: {myScore} | {opponentName}:{' '}
+                            {opponentScore}
+                        </p>
+                        <button
+                            onClick={resetGame}
+                            className="px-6 py-2 bg-white text-gray-900 font-bold rounded-full hover:scale-105 transition"
+                        >
+                            VOLVER A JUGAR
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <svg
+                width="100%"
+                height="100%"
+                viewBox="0 0 320 568"
+                preserveAspectRatio="xMidYMid meet"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="rounded-3xl shadow-2xl overflow-hidden"
             >
-              VOLVER A JUGAR
-            </button>
-          </div>
-        </div>
-      )}
+                <g clipPath="url(#clip0_1_209)">
+                    <rect width="320" height="568" fill="black" />
 
-      <svg
-        width="320"
-        height="568"
-        viewBox="0 0 320 568"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className="w-full h-auto max-w-sm mx-auto"
-      >
-        <g clipPath="url(#clip0_1_209)">
-          <rect width="320" height="568" fill="black" />
+                    {/* Código de sala y nombre del jugador actual */}
+                    <text
+                        x="160"
+                        y="30"
+                        textAnchor="middle"
+                        fill="#66CC99"
+                        fontSize="12"
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                    >
+                        🏠 {roomCode} | 👤 {myName}
+                    </text>
 
-          {/* === CÓDIGO DE SALA Y USUARIO === */}
-          <text x="160" y="30" textAnchor="middle" fill="#66CC99" fontSize="12" fontFamily="monospace" fontWeight="bold">
-            🏠 {roomCode} | 👤 {username}
-          </text>
+                    {/* Contador de tiempo */}
+                    <text
+                        x="160"
+                        y="65"
+                        textAnchor="middle"
+                        fill="#FFCC99"
+                        fontSize="28"
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                    >
+                        {canPlay && !gameOver ? `⏱️ ${timer}s` : '⚡'}
+                    </text>
 
-          {/* === CONTADOR DE TIEMPO CENTRADO === */}
-          <text x="160" y="65" textAnchor="middle" fill="#FFCC99" fontSize="28" fontFamily="monospace" fontWeight="bold">
-            {isWaiting && !gameOver ? `⏱️ ${timer}s` : '⚡'}
-          </text>
+                    {/* Texto decorativo (el que enviaste) */}
+                    <path
+                        d="M93.0537 394.788V400H91.9727V387.203H96.332C97.6621 387.203 98.7109 387.543 99.4785 388.223C100.252 388.902 100.639 389.837 100.639 391.026C100.639 392.228 100.267 393.156 99.5225 393.812C98.7842 394.463 97.7119 394.788 96.3057 394.788H93.0537ZM93.0537 393.874H96.332C97.3809 393.874 98.1807 393.625 98.7314 393.127C99.2822 392.629 99.5576 391.935 99.5576 391.044C99.5576 390.159 99.2822 389.456 98.7314 388.935C98.1865 388.407 97.4102 388.138 96.4023 388.126H93.0537V393.874ZM104.383 400H103.302V387.203H104.383V400ZM116.925 396.01C116.778 397.357 116.295 398.389 115.475 399.104C114.66 399.818 113.573 400.176 112.214 400.176C111.265 400.176 110.424 399.938 109.691 399.464C108.965 398.989 108.402 398.318 108.004 397.451C107.605 396.578 107.403 395.582 107.397 394.463V392.802C107.397 391.665 107.597 390.657 107.995 389.778C108.394 388.899 108.965 388.223 109.709 387.748C110.459 387.268 111.32 387.027 112.293 387.027C113.664 387.027 114.745 387.399 115.536 388.144C116.333 388.882 116.796 389.904 116.925 391.211H115.835C115.565 389.037 114.385 387.95 112.293 387.95C111.133 387.95 110.207 388.384 109.516 389.251C108.83 390.118 108.487 391.316 108.487 392.846V394.41C108.487 395.887 108.821 397.064 109.489 397.943C110.163 398.822 111.071 399.262 112.214 399.262C113.345 399.262 114.197 398.992 114.771 398.453C115.346 397.908 115.7 397.094 115.835 396.01H116.925ZM122.436 393.646L120.634 395.421V400H119.553V387.203H120.634V394.103L127.19 387.203H128.553L123.191 392.898L128.966 400H127.647L122.436 393.646ZM142.193 396.414H136.384L135.065 400H133.932L138.774 387.203H139.803L144.646 400H143.521L142.193 396.414ZM136.718 395.491H141.851L139.284 388.521L136.718 395.491ZM156.062 400H154.981L147.625 389.049V400H146.535V387.203H147.625L154.99 398.163V387.203H156.062V400ZM173.148 394.296C173.148 395.474 172.943 396.508 172.533 397.398C172.129 398.289 171.549 398.975 170.793 399.455C170.037 399.936 169.164 400.176 168.174 400.176C166.68 400.176 165.473 399.643 164.553 398.576C163.633 397.504 163.173 396.06 163.173 394.243V392.925C163.173 391.759 163.378 390.728 163.788 389.831C164.204 388.929 164.79 388.237 165.546 387.757C166.302 387.271 167.172 387.027 168.156 387.027C169.141 387.027 170.008 387.265 170.758 387.739C171.514 388.214 172.097 388.885 172.507 389.752C172.917 390.619 173.131 391.624 173.148 392.767V394.296ZM172.067 392.907C172.067 391.366 171.719 390.159 171.021 389.286C170.324 388.413 169.369 387.977 168.156 387.977C166.967 387.977 166.018 388.416 165.309 389.295C164.605 390.168 164.254 391.39 164.254 392.96V394.296C164.254 395.813 164.605 397.018 165.309 397.908C166.012 398.793 166.967 399.235 168.174 399.235C169.398 399.235 170.354 398.799 171.039 397.926C171.725 397.047 172.067 395.825 172.067 394.261V392.907ZM176.954 394.788V400H175.873V387.203H180.232C181.562 387.203 182.611 387.543 183.379 388.223C184.152 388.902 184.539 389.837 184.539 391.026C184.539 392.228 184.167 393.156 183.423 393.812C182.685 394.463 181.612 394.788 180.206 394.788H176.954ZM176.954 393.874H180.232C181.281 393.874 182.081 393.625 182.632 393.127C183.183 392.629 183.458 391.935 183.458 391.044C183.458 390.159 183.183 389.456 182.632 388.935C182.087 388.407 181.311 388.138 180.303 388.126H176.954V393.874ZM195.648 388.126H191.263V400H190.182V388.126H185.805V387.203H195.648V388.126ZM199.041 400H197.96V387.203H199.041V400ZM211.979 394.296C211.979 395.474 211.773 396.508 211.363 397.398C210.959 398.289 210.379 398.975 209.623 399.455C208.867 399.936 207.994 400.176 207.004 400.176C205.51 400.176 204.303 399.643 203.383 398.576C202.463 397.504 202.003 396.06 202.003 394.243V392.925C202.003 391.759 202.208 390.728 202.618 389.831C203.034 388.929 203.62 388.237 204.376 387.757C205.132 387.271 206.002 387.027 206.986 387.027C207.971 387.027 208.838 387.265 209.588 387.739C210.344 388.214 210.927 388.885 211.337 389.752C211.747 390.619 211.961 391.624 211.979 392.767V394.296ZM210.897 392.907C210.897 391.366 210.549 390.159 209.852 389.286C209.154 388.413 208.199 387.977 206.986 387.977C205.797 387.977 204.848 388.416 204.139 389.295C203.436 390.168 203.084 391.39 203.084 392.96V394.296C203.084 395.813 203.436 397.018 204.139 397.908C204.842 398.793 205.797 399.235 207.004 399.235C208.229 399.235 209.184 398.799 209.869 397.926C210.555 397.047 210.897 395.825 210.897 394.261V392.907ZM224.23 400H223.149L215.793 389.049V400H214.703V387.203H215.793L223.158 398.163V387.203H224.23V400ZM226.981 399.367C226.981 399.162 227.046 398.989 227.175 398.849C227.31 398.702 227.494 398.629 227.729 398.629C227.963 398.629 228.147 398.702 228.282 398.849C228.417 398.989 228.484 399.162 228.484 399.367C228.484 399.572 228.417 399.742 228.282 399.877C228.147 400.006 227.963 400.07 227.729 400.07C227.494 400.07 227.31 400.006 227.175 399.877C227.046 399.742 226.981 399.572 226.981 399.367ZM226.999 391.255C226.999 391.05 227.063 390.877 227.192 390.736C227.327 390.59 227.512 390.517 227.746 390.517C227.98 390.517 228.165 390.59 228.3 390.736C228.435 390.877 228.502 391.05 228.502 391.255C228.502 391.46 228.435 391.63 228.3 391.765C228.165 391.894 227.98 391.958 227.746 391.958C227.512 391.958 227.327 391.894 227.192 391.765C227.063 391.63 226.999 391.46 226.999 391.255Z"
+                        fill="white"
+                    />
 
-          {/* Texto decorativo (el que enviaste) - mantengo el path original */}
-          <path
-            d="M93.0537 394.788V400H91.9727V387.203H96.332C97.6621 387.203 98.7109 387.543 99.4785 388.223C100.252 388.902 100.639 389.837 100.639 391.026C100.639 392.228 100.267 393.156 99.5225 393.812C98.7842 394.463 97.7119 394.788 96.3057 394.788H93.0537ZM93.0537 393.874H96.332C97.3809 393.874 98.1807 393.625 98.7314 393.127C99.2822 392.629 99.5576 391.935 99.5576 391.044C99.5576 390.159 99.2822 389.456 98.7314 388.935C98.1865 388.407 97.4102 388.138 96.4023 388.126H93.0537V393.874ZM104.383 400H103.302V387.203H104.383V400ZM116.925 396.01C116.778 397.357 116.295 398.389 115.475 399.104C114.66 399.818 113.573 400.176 112.214 400.176C111.265 400.176 110.424 399.938 109.691 399.464C108.965 398.989 108.402 398.318 108.004 397.451C107.605 396.578 107.403 395.582 107.397 394.463V392.802C107.397 391.665 107.597 390.657 107.995 389.778C108.394 388.899 108.965 388.223 109.709 387.748C110.459 387.268 111.32 387.027 112.293 387.027C113.664 387.027 114.745 387.399 115.536 388.144C116.333 388.882 116.796 389.904 116.925 391.211H115.835C115.565 389.037 114.385 387.95 112.293 387.95C111.133 387.95 110.207 388.384 109.516 389.251C108.83 390.118 108.487 391.316 108.487 392.846V394.41C108.487 395.887 108.821 397.064 109.489 397.943C110.163 398.822 111.071 399.262 112.214 399.262C113.345 399.262 114.197 398.992 114.771 398.453C115.346 397.908 115.7 397.094 115.835 396.01H116.925ZM122.436 393.646L120.634 395.421V400H119.553V387.203H120.634V394.103L127.19 387.203H128.553L123.191 392.898L128.966 400H127.647L122.436 393.646ZM142.193 396.414H136.384L135.065 400H133.932L138.774 387.203H139.803L144.646 400H143.521L142.193 396.414ZM136.718 395.491H141.851L139.284 388.521L136.718 395.491ZM156.062 400H154.981L147.625 389.049V400H146.535V387.203H147.625L154.99 398.163V387.203H156.062V400ZM173.148 394.296C173.148 395.474 172.943 396.508 172.533 397.398C172.129 398.289 171.549 398.975 170.793 399.455C170.037 399.936 169.164 400.176 168.174 400.176C166.68 400.176 165.473 399.643 164.553 398.576C163.633 397.504 163.173 396.06 163.173 394.243V392.925C163.173 391.759 163.378 390.728 163.788 389.831C164.204 388.929 164.79 388.237 165.546 387.757C166.302 387.271 167.172 387.027 168.156 387.027C169.141 387.027 170.008 387.265 170.758 387.739C171.514 388.214 172.097 388.885 172.507 389.752C172.917 390.619 173.131 391.624 173.148 392.767V394.296ZM172.067 392.907C172.067 391.366 171.719 390.159 171.021 389.286C170.324 388.413 169.369 387.977 168.156 387.977C166.967 387.977 166.018 388.416 165.309 389.295C164.605 390.168 164.254 391.39 164.254 392.96V394.296C164.254 395.813 164.605 397.018 165.309 397.908C166.012 398.793 166.967 399.235 168.174 399.235C169.398 399.235 170.354 398.799 171.039 397.926C171.725 397.047 172.067 395.825 172.067 394.261V392.907ZM176.954 394.788V400H175.873V387.203H180.232C181.562 387.203 182.611 387.543 183.379 388.223C184.152 388.902 184.539 389.837 184.539 391.026C184.539 392.228 184.167 393.156 183.423 393.812C182.685 394.463 181.612 394.788 180.206 394.788H176.954ZM176.954 393.874H180.232C181.281 393.874 182.081 393.625 182.632 393.127C183.183 392.629 183.458 391.935 183.458 391.044C183.458 390.159 183.183 389.456 182.632 388.935C182.087 388.407 181.311 388.138 180.303 388.126H176.954V393.874ZM195.648 388.126H191.263V400H190.182V388.126H185.805V387.203H195.648V388.126ZM199.041 400H197.96V387.203H199.041V400ZM211.979 394.296C211.979 395.474 211.773 396.508 211.363 397.398C210.959 398.289 210.379 398.975 209.623 399.455C208.867 399.936 207.994 400.176 207.004 400.176C205.51 400.176 204.303 399.643 203.383 398.576C202.463 397.504 202.003 396.06 202.003 394.243V392.925C202.003 391.759 202.208 390.728 202.618 389.831C203.034 388.929 203.62 388.237 204.376 387.757C205.132 387.271 206.002 387.027 206.986 387.027C207.971 387.027 208.838 387.265 209.588 387.739C210.344 388.214 210.927 388.885 211.337 389.752C211.747 390.619 211.961 391.624 211.979 392.767V394.296ZM210.897 392.907C210.897 391.366 210.549 390.159 209.852 389.286C209.154 388.413 208.199 387.977 206.986 387.977C205.797 387.977 204.848 388.416 204.139 389.295C203.436 390.168 203.084 391.39 203.084 392.96V394.296C203.084 395.813 203.436 397.018 204.139 397.908C204.842 398.793 205.797 399.235 207.004 399.235C208.229 399.235 209.184 398.799 209.869 397.926C210.555 397.047 210.897 395.825 210.897 394.261V392.907ZM224.23 400H223.149L215.793 389.049V400H214.703V387.203H215.793L223.158 398.163V387.203H224.23V400ZM226.981 399.367C226.981 399.162 227.046 398.989 227.175 398.849C227.31 398.702 227.494 398.629 227.729 398.629C227.963 398.629 228.147 398.702 228.282 398.849C228.417 398.989 228.484 399.162 228.484 399.367C228.484 399.572 228.417 399.742 228.282 399.877C228.147 400.006 227.963 400.07 227.729 400.07C227.494 400.07 227.31 400.006 227.175 399.877C227.046 399.742 226.981 399.572 226.981 399.367ZM226.999 391.255C226.999 391.05 227.063 390.877 227.192 390.736C227.327 390.59 227.512 390.517 227.746 390.517C227.98 390.517 228.165 390.59 228.3 390.736C228.435 390.877 228.502 391.05 228.502 391.255C228.502 391.46 228.435 391.63 228.3 391.765C228.165 391.894 227.98 391.958 227.746 391.958C227.512 391.958 227.327 391.894 227.192 391.765C227.063 391.63 226.999 391.46 226.999 391.255Z"
-            fill="white"
-          />
-
-          {/* Mano PIEDRA */}
-          <g
-            onClick={() => handleChoice('rock')}
-            className={`
+                    {/* Mano PIEDRA */}
+                    <g
+                        onClick={() => handleChoice('rock')}
+                        className={`
               transition-all duration-300 cursor-pointer origin-center
               hover:scale-110 active:scale-95
               ${selectedChoice === 'rock' ? 'scale-100 opacity-100' : 'scale-90 opacity-40'}
-              ${!isWaiting || gameOver ? 'pointer-events-none' : ''}
+              ${!canPlay ? 'pointer-events-none' : ''}
             `}
-            style={{ transformOrigin: '63px 485px' }}
-          >
-            <rect x="29.5" y="451.459" width="68.0414" height="68.0414" rx="34.0207" fill="#37209D" />
-            <path d="M58.3764 454.707L76.8077 445.78C76.9977 445.688 77.1932 445.614 77.3887 445.545C75.9744 445.037 74.3902 445.109 72.9984 445.78L54.5671 454.707C52.7882 455.58 51.6519 457.392 51.6519 459.368V492.213H55.4612V459.368C55.4612 457.392 56.5975 455.58 58.3764 454.707Z" fill="black" />
-            <path d="M92.5007 469.004V464.327C92.5007 462.828 91.6938 461.428 90.4087 460.654L85.632 457.82V453.274C85.632 451.759 84.8906 450.359 83.6226 449.519L78.6154 446.158C78.2291 445.899 77.8163 445.698 77.3888 445.545C77.1933 445.614 76.9978 445.688 76.8077 445.78L58.3764 454.707C56.5975 455.58 55.4612 457.392 55.4612 459.368V492.213H74.8926H74.9261V482.347H78.7354H78.747L90.3433 473.386C91.6938 472.331 92.5007 470.718 92.5007 469.004Z" fill="#FFCC99" />
-            <path d="M51.5738 503.43V495.112C51.5738 493.514 52.8744 492.213 54.4726 492.213H51.6517H50.6633C49.0651 492.213 47.7637 493.514 47.7637 495.112V503.43C47.7637 505.027 49.0651 506.329 50.6633 506.329H54.4726C52.8744 506.329 51.5738 505.027 51.5738 503.43Z" fill="black" />
-            <path d="M74.8925 492.213H51.6519V459.368C51.6519 457.393 52.7882 455.58 54.5671 454.707L72.9984 445.78C74.81 444.907 76.9518 445.038 78.6154 446.158L83.6226 449.519C84.8905 450.359 85.632 451.759 85.632 453.274V457.82V464.64C85.632 466.451 84.6273 468.098 83.0127 468.905L72.1915 474.407C70.6759 475.181 68.8806 475.115 67.4312 474.259L60.6779 470.24C59.3273 469.449 58.5033 468 58.5033 466.435C58.5033 465.315 58.9652 464.31 59.6895 463.569C60.4146 462.844 61.4357 462.4 62.5393 462.4H65.5043" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M63.3953 482.347H78.747L90.3432 473.386C91.6938 472.332 92.5006 470.718 92.5006 469.004V464.327C92.5006 462.828 91.6937 461.428 90.4087 460.654L85.632 457.82" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M74.926 492.213V482.347" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M65.5044 457.82V466.797" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <rect x="46.066" y="491.574" width="32.8101" height="14.1618" rx="3.71557" fill="black" stroke="#231F20" strokeWidth="1.85779" />
-            <rect x="50.0708" y="492.503" width="27.8763" height="12.304" rx="2.32223" fill="#66CC99" />
-          </g>
+                        style={{ transformOrigin: '63px 485px' }}
+                    >
+                        <rect
+                            x="29.5"
+                            y="451.459"
+                            width="68.0414"
+                            height="68.0414"
+                            rx="34.0207"
+                            fill="#37209D"
+                        />
+                        <path
+                            d="M58.3764 454.707L76.8077 445.78C76.9977 445.688 77.1932 445.614 77.3887 445.545C75.9744 445.037 74.3902 445.109 72.9984 445.78L54.5671 454.707C52.7882 455.58 51.6519 457.392 51.6519 459.368V492.213H55.4612V459.368C55.4612 457.392 56.5975 455.58 58.3764 454.707Z"
+                            fill="black"
+                        />
+                        <path
+                            d="M92.5007 469.004V464.327C92.5007 462.828 91.6938 461.428 90.4087 460.654L85.632 457.82V453.274C85.632 451.759 84.8906 450.359 83.6226 449.519L78.6154 446.158C78.2291 445.899 77.8163 445.698 77.3888 445.545C77.1933 445.614 76.9978 445.688 76.8077 445.78L58.3764 454.707C56.5975 455.58 55.4612 457.392 55.4612 459.368V492.213H74.8926H74.9261V482.347H78.7354H78.747L90.3433 473.386C91.6938 472.331 92.5007 470.718 92.5007 469.004Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M51.5738 503.43V495.112C51.5738 493.514 52.8744 492.213 54.4726 492.213H51.6517H50.6633C49.0651 492.213 47.7637 493.514 47.7637 495.112V503.43C47.7637 505.027 49.0651 506.329 50.6633 506.329H54.4726C52.8744 506.329 51.5738 505.027 51.5738 503.43Z"
+                            fill="black"
+                        />
+                        <path
+                            d="M74.8925 492.213H51.6519V459.368C51.6519 457.393 52.7882 455.58 54.5671 454.707L72.9984 445.78C74.81 444.907 76.9518 445.038 78.6154 446.158L83.6226 449.519C84.8905 450.359 85.632 451.759 85.632 453.274V457.82V464.64C85.632 466.451 84.6273 468.098 83.0127 468.905L72.1915 474.407C70.6759 475.181 68.8806 475.115 67.4312 474.259L60.6779 470.24C59.3273 469.449 58.5033 468 58.5033 466.435C58.5033 465.315 58.9652 464.31 59.6895 463.569C60.4146 462.844 61.4357 462.4 62.5393 462.4H65.5043"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M63.3953 482.347H78.747L90.3432 473.386C91.6938 472.332 92.5006 470.718 92.5006 469.004V464.327C92.5006 462.828 91.6937 461.428 90.4087 460.654L85.632 457.82"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M74.926 492.213V482.347"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M65.5044 457.82V466.797"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <rect
+                            x="46.066"
+                            y="491.574"
+                            width="32.8101"
+                            height="14.1618"
+                            rx="3.71557"
+                            fill="black"
+                            stroke="#231F20"
+                            strokeWidth="1.85779"
+                        />
+                        <rect
+                            x="50.0708"
+                            y="492.503"
+                            width="27.8763"
+                            height="12.304"
+                            rx="2.32223"
+                            fill="#66CC99"
+                        />
+                    </g>
 
-          {/* Mano PAPEL */}
-          <g
-            onClick={() => handleChoice('paper')}
-            className={`
+                    {/* Mano PAPEL */}
+                    <g
+                        onClick={() => handleChoice('paper')}
+                        className={`
               transition-all duration-300 cursor-pointer origin-center
               hover:scale-110 active:scale-95
               ${selectedChoice === 'paper' ? 'scale-100 opacity-100' : 'scale-90 opacity-40'}
-              ${!isWaiting || gameOver ? 'pointer-events-none' : ''}
+              ${!canPlay ? 'pointer-events-none' : ''}
             `}
-            style={{ transformOrigin: '158px 485px' }}
-          >
-            <rect x="124.542" y="451.459" width="68.0414" height="68.0414" rx="34.0207" fill="#37209D" />
-            <path d="M147.569 504.152V495.851C147.569 494.996 147.94 494.235 148.521 493.703H146.294C144.696 493.703 143.395 495.004 143.395 496.619V504.92C143.395 506.534 144.696 507.836 146.294 507.836H171.544C172.295 507.836 172.975 507.54 173.49 507.068H150.468C148.87 507.068 147.569 505.767 147.569 504.152Z" fill="black" />
-            <path d="M176.921 437.724C177.005 437.39 177.145 437.088 177.322 436.818C177.157 436.7 177.006 436.566 176.815 436.482C176.42 436.317 176.025 436.234 175.629 436.234C174.312 436.234 173.093 437.124 172.747 438.492L171.393 443.986L171.502 459.713L176.921 437.724Z" fill="#FFCC99" />
-            <path d="M181.961 457.638C182.033 457.519 182.129 457.43 182.212 457.324C181.703 457.012 181.133 456.84 180.554 456.84C180.073 456.84 179.596 456.962 179.155 457.174L177.678 464.704L181.961 457.638Z" fill="#FFCC99" />
-            <path d="M153.713 437.098C153.713 437.015 153.696 436.933 153.696 436.867C153.696 436.254 153.907 435.691 154.236 435.212C153.551 434.73 152.673 434.529 151.795 434.752C150.461 435.082 149.522 436.268 149.522 437.635C149.522 437.701 149.539 437.783 149.539 437.865L150.336 448.864L155.492 461.64L153.713 437.098Z" fill="#FFCC99" />
-            <path d="M164.88 431.069C164.913 430.377 165.17 429.75 165.568 429.241C165.085 428.95 164.524 428.773 163.918 428.773C162.189 428.773 160.788 430.124 160.706 431.837L160.321 440.337L163.595 459.449L164.88 431.069Z" fill="#FFCC99" />
-            <path d="M153.202 480.237L144.011 448.677C143.929 448.398 143.896 448.134 143.896 447.854C143.896 447.303 144.057 446.769 144.347 446.309C143.5 445.683 142.347 445.527 141.319 446.035C140.315 446.529 139.722 447.55 139.722 448.621C139.722 448.901 139.755 449.165 139.837 449.445L149.028 481.004V493.704H168.794V492.936H153.202V480.237Z" fill="black" />
-            <path d="M173.043 481.004L183.387 461.584C183.964 460.513 183.882 459.196 183.173 458.208C182.907 457.825 182.573 457.544 182.212 457.324C182.129 457.43 182.033 457.519 181.961 457.638L177.679 464.704L179.155 457.174C178.616 457.434 178.132 457.834 177.787 458.405L173.505 465.471L178.545 439.776C178.769 438.614 178.252 437.484 177.322 436.818C177.145 437.088 177.005 437.39 176.921 437.723L171.502 459.713L171.393 443.986L167.328 460.48L167.13 431.952C167.119 430.796 166.493 429.797 165.569 429.241C165.17 429.75 164.914 430.377 164.88 431.069L163.595 459.449L160.321 440.337L159.422 460.217L155.468 437.141C155.327 436.323 154.861 435.652 154.236 435.212C153.907 435.691 153.696 436.254 153.696 436.867C153.696 436.933 153.713 437.015 153.713 437.098L155.491 461.64L150.336 448.864L151.318 462.407L145.322 447.55C145.111 447.03 144.762 446.617 144.347 446.309C144.057 446.769 143.896 447.303 143.896 447.854C143.896 448.133 143.929 448.397 144.011 448.677L153.202 480.237V492.936H168.794V485.946L173.043 481.004Z" fill="#FFCC99" />
-            <path d="M159.422 460.217L155.468 437.141C155.172 435.427 153.475 434.324 151.795 434.752C150.461 435.082 149.522 436.268 149.522 437.635C149.522 437.701 149.539 437.783 149.539 437.865L151.318 462.407" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M167.328 460.481L167.13 431.952C167.114 430.19 165.681 428.773 163.918 428.773C162.189 428.773 160.788 430.124 160.706 431.837L159.421 460.217" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M173.504 465.471L178.545 439.776C178.808 438.409 178.083 437.042 176.815 436.482C176.42 436.317 176.025 436.234 175.629 436.234C174.312 436.234 173.093 437.124 172.747 438.491L167.328 460.481" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M151.318 462.407L145.322 447.55C144.68 445.969 142.851 445.278 141.319 446.035C140.315 446.529 139.722 447.55 139.722 448.621C139.722 448.901 139.755 449.165 139.837 449.445L149.028 481.004V493.704H168.794V485.946L173.043 481.004L183.387 461.584C183.964 460.513 183.882 459.196 183.173 458.208C182.531 457.285 181.543 456.84 180.554 456.84C179.484 456.84 178.413 457.367 177.787 458.405L173.505 465.471L165.714 466.328L161.316 474.794" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <rect x="142.253" y="493.018" width="32.8101" height="14.1618" rx="3.71557" fill="black" stroke="#231F20" strokeWidth="1.85779" />
-            <rect x="146.258" y="493.946" width="27.8763" height="12.304" rx="2.32223" fill="#66CC99" />
-          </g>
+                        style={{ transformOrigin: '158px 485px' }}
+                    >
+                        <rect
+                            x="124.542"
+                            y="451.459"
+                            width="68.0414"
+                            height="68.0414"
+                            rx="34.0207"
+                            fill="#37209D"
+                        />
+                        <path
+                            d="M147.569 504.152V495.851C147.569 494.996 147.94 494.235 148.521 493.703H146.294C144.696 493.703 143.395 495.004 143.395 496.619V504.92C143.395 506.534 144.696 507.836 146.294 507.836H171.544C172.295 507.836 172.975 507.54 173.49 507.068H150.468C148.87 507.068 147.569 505.767 147.569 504.152Z"
+                            fill="black"
+                        />
+                        <path
+                            d="M176.921 437.724C177.005 437.39 177.145 437.088 177.322 436.818C177.157 436.7 177.006 436.566 176.815 436.482C176.42 436.317 176.025 436.234 175.629 436.234C174.312 436.234 173.093 437.124 172.747 438.492L171.393 443.986L171.502 459.713L176.921 437.724Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M181.961 457.638C182.033 457.519 182.129 457.43 182.212 457.324C181.703 457.012 181.133 456.84 180.554 456.84C180.073 456.84 179.596 456.962 179.155 457.174L177.678 464.704L181.961 457.638Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M153.713 437.098C153.713 437.015 153.696 436.933 153.696 436.867C153.696 436.254 153.907 435.691 154.236 435.212C153.551 434.73 152.673 434.529 151.795 434.752C150.461 435.082 149.522 436.268 149.522 437.635C149.522 437.701 149.539 437.783 149.539 437.865L150.336 448.864L155.492 461.64L153.713 437.098Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M164.88 431.069C164.913 430.377 165.17 429.75 165.568 429.241C165.085 428.95 164.524 428.773 163.918 428.773C162.189 428.773 160.788 430.124 160.706 431.837L160.321 440.337L163.595 459.449L164.88 431.069Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M153.202 480.237L144.011 448.677C143.929 448.398 143.896 448.134 143.896 447.854C143.896 447.303 144.057 446.769 144.347 446.309C143.5 445.683 142.347 445.527 141.319 446.035C140.315 446.529 139.722 447.55 139.722 448.621C139.722 448.901 139.755 449.165 139.837 449.445L149.028 481.004V493.704H168.794V492.936H153.202V480.237Z"
+                            fill="black"
+                        />
+                        <path
+                            d="M173.043 481.004L183.387 461.584C183.964 460.513 183.882 459.196 183.173 458.208C182.907 457.825 182.573 457.544 182.212 457.324C182.129 457.43 182.033 457.519 181.961 457.638L177.679 464.704L179.155 457.174C178.616 457.434 178.132 457.834 177.787 458.405L173.505 465.471L178.545 439.776C178.769 438.614 178.252 437.484 177.322 436.818C177.145 437.088 177.005 437.39 176.921 437.723L171.502 459.713L171.393 443.986L167.328 460.48L167.13 431.952C167.119 430.796 166.493 429.797 165.569 429.241C165.17 429.75 164.914 430.377 164.88 431.069L163.595 459.449L160.321 440.337L159.422 460.217L155.468 437.141C155.327 436.323 154.861 435.652 154.236 435.212C153.907 435.691 153.696 436.254 153.696 436.867C153.696 436.933 153.713 437.015 153.713 437.098L155.491 461.64L150.336 448.864L151.318 462.407L145.322 447.55C145.111 447.03 144.762 446.617 144.347 446.309C144.057 446.769 143.896 447.303 143.896 447.854C143.896 448.133 143.929 448.397 144.011 448.677L153.202 480.237V492.936H168.794V485.946L173.043 481.004Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M159.422 460.217L155.468 437.141C155.172 435.427 153.475 434.324 151.795 434.752C150.461 435.082 149.522 436.268 149.522 437.635C149.522 437.701 149.539 437.783 149.539 437.865L151.318 462.407"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M167.328 460.481L167.13 431.952C167.114 430.19 165.681 428.773 163.918 428.773C162.189 428.773 160.788 430.124 160.706 431.837L159.421 460.217"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M173.504 465.471L178.545 439.776C178.808 438.409 178.083 437.042 176.815 436.482C176.42 436.317 176.025 436.234 175.629 436.234C174.312 436.234 173.093 437.124 172.747 438.491L167.328 460.481"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M151.318 462.407L145.322 447.55C144.68 445.969 142.851 445.278 141.319 446.035C140.315 446.529 139.722 447.55 139.722 448.621C139.722 448.901 139.755 449.165 139.837 449.445L149.028 481.004V493.704H168.794V485.946L173.043 481.004L183.387 461.584C183.964 460.513 183.882 459.196 183.173 458.208C182.531 457.285 181.543 456.84 180.554 456.84C179.484 456.84 178.413 457.367 177.787 458.405L173.505 465.471L165.714 466.328L161.316 474.794"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <rect
+                            x="142.253"
+                            y="493.018"
+                            width="32.8101"
+                            height="14.1618"
+                            rx="3.71557"
+                            fill="black"
+                            stroke="#231F20"
+                            strokeWidth="1.85779"
+                        />
+                        <rect
+                            x="146.258"
+                            y="493.946"
+                            width="27.8763"
+                            height="12.304"
+                            rx="2.32223"
+                            fill="#66CC99"
+                        />
+                    </g>
 
-          {/* Mano TIJERA */}
-          <g
-            onClick={() => handleChoice('scissors')}
-            className={`
+                    {/* Mano TIJERA */}
+                    <g
+                        onClick={() => handleChoice('scissors')}
+                        className={`
               transition-all duration-300 cursor-pointer origin-center
               hover:scale-110 active:scale-95
               ${selectedChoice === 'scissors' ? 'scale-100 opacity-100' : 'scale-90 opacity-40'}
-              ${!isWaiting || gameOver ? 'pointer-events-none' : ''}
+              ${!canPlay ? 'pointer-events-none' : ''}
             `}
-            style={{ transformOrigin: '253px 485px' }}
-          >
-            <rect x="219.583" y="451.459" width="68.0414" height="68.0414" rx="34.0207" fill="#37209D" />
-            <path d="M271.242 433.474C272.527 434.034 273.268 435.418 272.988 436.801L267.635 464.358V464.374L261.227 460.997C260.338 460.52 259.251 460.849 258.757 461.722L258.164 462.776C257.966 463.123 257.851 463.501 257.801 463.863L255.298 463.913C255.298 463.633 255.265 463.337 255.182 463.04L252.086 451.263L248.116 431.86C248.067 431.646 248.05 431.431 248.05 431.217C248.05 429.833 248.94 428.582 250.29 428.153C252.069 427.593 253.947 428.664 254.375 430.476L261.03 456.682L267.141 435.45C267.503 434.1 268.738 433.227 270.056 433.227C270.451 433.227 270.847 433.309 271.242 433.474Z" fill="#FFCC99" />
-            <path d="M242.812 462.545V458.724C242.812 457.308 243.702 456.04 245.036 455.561L252.511 452.881L252.086 451.263L240.095 455.561C238.76 456.04 237.871 457.308 237.871 458.724V462.545L243.257 479.363V492.063H248.198V479.363L242.812 462.545" fill="black" />
-            <path d="M267.256 479.363L271.538 471.325C272.658 469.233 271.868 466.614 269.759 465.494L267.635 464.374L261.227 460.997C260.338 460.519 259.251 460.849 258.757 461.722L258.164 462.776C257.966 463.122 257.851 463.501 257.801 463.863L255.298 463.913C255.298 463.633 255.265 463.337 255.182 463.04L252.511 452.881L245.036 455.561C243.702 456.04 242.812 457.308 242.812 458.724V462.545L248.198 479.363V492.063H263.023V484.305L267.256 479.363Z" fill="#FFCC99" />
-            <path d="M242.549 503.296V494.962C242.549 493.364 243.85 492.063 245.448 492.063H243.257H240.506C238.908 492.063 237.607 493.364 237.607 494.962V503.296C237.607 504.894 238.908 506.179 240.506 506.179H245.448C243.85 506.179 242.549 504.894 242.549 503.296Z" fill="black" />
-            <path d="M261.03 456.682L254.375 430.476C253.947 428.664 252.069 427.593 250.29 428.153C248.939 428.582 248.05 429.833 248.05 431.217C248.05 431.431 248.067 431.646 248.116 431.86L252.086 451.263" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M267.635 464.358L272.988 436.801C273.268 435.417 272.527 434.033 271.242 433.473C270.846 433.309 270.451 433.227 270.056 433.227C268.738 433.227 267.503 434.1 267.14 435.45L261.03 456.682" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M263.896 470.419L261.392 468.508L258.954 466.63C258.081 465.971 257.67 464.901 257.801 463.863C257.851 463.501 257.966 463.122 258.164 462.776L258.757 461.722C259.251 460.849 260.338 460.519 261.227 460.997L267.635 464.374L269.759 465.494C271.868 466.614 272.658 469.233 271.538 471.325L267.256 479.363L263.023 484.305V492.063H243.257V479.363L237.871 462.545V458.724C237.871 457.308 238.76 456.04 240.095 455.561L252.086 451.263L255.182 463.04C255.265 463.337 255.298 463.633 255.298 463.913C255.298 465.543 254.145 467.01 252.464 467.306L247.82 468.146C246.189 468.443 244.591 467.503 244.064 465.955L242.499 461.491" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <path d="M261.392 468.508L254.276 476.81" stroke="#231F20" strokeWidth="2.09" strokeMiterlimit="10" />
-            <rect x="235.749" y="491.773" width="32.8101" height="14.1618" rx="3.71557" fill="black" stroke="#231F20" strokeWidth="1.85779" />
-            <rect x="239.754" y="492.702" width="27.8763" height="12.304" rx="2.32223" fill="#66CC99" />
-          </g>
+                        style={{ transformOrigin: '253px 485px' }}
+                    >
+                        <rect
+                            x="219.583"
+                            y="451.459"
+                            width="68.0414"
+                            height="68.0414"
+                            rx="34.0207"
+                            fill="#37209D"
+                        />
+                        <path
+                            d="M271.242 433.474C272.527 434.034 273.268 435.418 272.988 436.801L267.635 464.358V464.374L261.227 460.997C260.338 460.52 259.251 460.849 258.757 461.722L258.164 462.776C257.966 463.123 257.851 463.501 257.801 463.863L255.298 463.913C255.298 463.633 255.265 463.337 255.182 463.04L252.086 451.263L248.116 431.86C248.067 431.646 248.05 431.431 248.05 431.217C248.05 429.833 248.94 428.582 250.29 428.153C252.069 427.593 253.947 428.664 254.375 430.476L261.03 456.682L267.141 435.45C267.503 434.1 268.738 433.227 270.056 433.227C270.451 433.227 270.847 433.309 271.242 433.474Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M242.812 462.545V458.724C242.812 457.308 243.702 456.04 245.036 455.561L252.511 452.881L252.086 451.263L240.095 455.561C238.76 456.04 237.871 457.308 237.871 458.724V462.545L243.257 479.363V492.063H248.198V479.363L242.812 462.545"
+                            fill="black"
+                        />
+                        <path
+                            d="M267.256 479.363L271.538 471.325C272.658 469.233 271.868 466.614 269.759 465.494L267.635 464.374L261.227 460.997C260.338 460.519 259.251 460.849 258.757 461.722L258.164 462.776C257.966 463.122 257.851 463.501 257.801 463.863L255.298 463.913C255.298 463.633 255.265 463.337 255.182 463.04L252.511 452.881L245.036 455.561C243.702 456.04 242.812 457.308 242.812 458.724V462.545L248.198 479.363V492.063H263.023V484.305L267.256 479.363Z"
+                            fill="#FFCC99"
+                        />
+                        <path
+                            d="M242.549 503.296V494.962C242.549 493.364 243.85 492.063 245.448 492.063H243.257H240.506C238.908 492.063 237.607 493.364 237.607 494.962V503.296C237.607 504.894 238.908 506.179 240.506 506.179H245.448C243.85 506.179 242.549 504.894 242.549 503.296Z"
+                            fill="black"
+                        />
+                        <path
+                            d="M261.03 456.682L254.375 430.476C253.947 428.664 252.069 427.593 250.29 428.153C248.939 428.582 248.05 429.833 248.05 431.217C248.05 431.431 248.067 431.646 248.116 431.86L252.086 451.263"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M267.635 464.358L272.988 436.801C273.268 435.417 272.527 434.033 271.242 433.473C270.846 433.309 270.451 433.227 270.056 433.227C268.738 433.227 267.503 434.1 267.14 435.45L261.03 456.682"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M263.896 470.419L261.392 468.508L258.954 466.63C258.081 465.971 257.67 464.901 257.801 463.863C257.851 463.501 257.966 463.122 258.164 462.776L258.757 461.722C259.251 460.849 260.338 460.519 261.227 460.997L267.635 464.374L269.759 465.494C271.868 466.614 272.658 469.233 271.538 471.325L267.256 479.363L263.023 484.305V492.063H243.257V479.363L237.871 462.545V458.724C237.871 457.308 238.76 456.04 240.095 455.561L252.086 451.263L255.182 463.04C255.265 463.337 255.298 463.633 255.298 463.913C255.298 465.543 254.145 467.01 252.464 467.306L247.82 468.146C246.189 468.443 244.591 467.503 244.064 465.955L242.499 461.491"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <path
+                            d="M261.392 468.508L254.276 476.81"
+                            stroke="#231F20"
+                            strokeWidth="2.09"
+                            strokeMiterlimit="10"
+                        />
+                        <rect
+                            x="235.749"
+                            y="491.773"
+                            width="32.8101"
+                            height="14.1618"
+                            rx="3.71557"
+                            fill="black"
+                            stroke="#231F20"
+                            strokeWidth="1.85779"
+                        />
+                        <rect
+                            x="239.754"
+                            y="492.702"
+                            width="27.8763"
+                            height="12.304"
+                            rx="2.32223"
+                            fill="#66CC99"
+                        />
+                    </g>
 
-          {/* Marcador y mensaje */}
-          <text x="160" y="540" textAnchor="middle" fill="white" fontSize="14" fontFamily="monospace" className="font-bold">
-            TÚ: {userScore}  |  CPU: {computerScore}
-          </text>
-          {resultMessage && !gameOver && (
-            <text x="160" y="560" textAnchor="middle" fill="#66CC99" fontSize="12" fontFamily="monospace">
-              {resultMessage}
-            </text>
-          )}
-        </g>
-        <defs>
-          <clipPath id="clip0_1_209">
-            <rect width="320" height="568" fill="white" />
-          </clipPath>
-        </defs>
-      </svg>
-    </div>
-  )
+                    {/* Marcador con nombres reales */}
+                    <text
+                        x="160"
+                        y="540"
+                        textAnchor="middle"
+                        fill="white"
+                        fontSize="14"
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                    >
+                        {myName}: {myScore} | {opponentName}: {opponentScore}
+                    </text>
+                    {resultMessage && !gameOver && (
+                        <text
+                            x="160"
+                            y="560"
+                            textAnchor="middle"
+                            fill="#66CC99"
+                            fontSize="12"
+                            fontFamily="monospace"
+                        >
+                            {resultMessage}
+                        </text>
+                    )}
+                </g>
+                <defs>
+                    <clipPath id="clip0_1_209">
+                        <rect width="320" height="568" fill="white" />
+                    </clipPath>
+                </defs>
+            </svg>
+        </div>
+    )
 }

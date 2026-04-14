@@ -74,8 +74,11 @@ AuthUserGame.init(
 interface RoomAttributes {
     id?: number
     roomCode: string
+    nameRoom: string
     player1Id: number
     player2Id?: number | null
+    player1Ready: boolean
+    player2Ready: boolean
     p1Choice?: string | null
     p2Choice?: string | null
     status: string
@@ -85,8 +88,11 @@ interface RoomAttributes {
 export class Rooms extends Model<RoomAttributes> implements RoomAttributes {
     declare id: number
     declare roomCode: string
+    declare nameRoom: string
     declare player1Id: number
     declare player2Id: number | null
+    declare player1Ready: boolean
+    declare player2Ready: boolean
     declare p1Choice: string | null
     declare p2Choice: string | null
     declare status: string
@@ -96,6 +102,11 @@ export class Rooms extends Model<RoomAttributes> implements RoomAttributes {
 Rooms.init(
     {
         id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+        nameRoom: {
+            type: DataTypes.STRING,
+            allowNull: false,
+            defaultValue: 'Nueva Sala',
+        },
         roomCode: { type: DataTypes.STRING, allowNull: false, unique: true },
         player1Id: {
             type: DataTypes.INTEGER,
@@ -112,6 +123,14 @@ Rooms.init(
                 model: { tableName: 'players', schema: SCHEMA_NAME },
                 key: 'id',
             },
+        },
+        player1Ready: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false,
+        },
+        player2Ready: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false,
         },
         status: { type: DataTypes.STRING, defaultValue: 'waiting' },
         p1Choice: { type: DataTypes.STRING, allowNull: true },

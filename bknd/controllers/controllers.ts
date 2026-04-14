@@ -216,13 +216,17 @@ export async function createRoom(req: Request) {
 
         // 3. Generar código de sala único de 4 caracteres
         const roomCode = generateOTP()
-
+        const body = await req.json()
+        const { nameRoom } = body
         // 4. Crear la sala en la DB
         const newRoom = await Rooms.create({
             roomCode,
+            nameRoom: nameRoom,
             player1Id: decoded.id,
             status: 'waiting',
             player2Id: null,
+            player1Ready: false,
+            player2Ready: false,
         })
 
         return new Response(JSON.stringify(newRoom), { status: 201 })
@@ -292,7 +296,19 @@ export async function joinRoom(req: Request) {
 export async function deleteRoom(req: Request) {
     try {
         await syncDatabase()
-        const { roomCode } = await req.json()
+
+        // 1. CAMBIO AQUÍ: Extraer de la URL, no del body
+        const { searchParams } = new URL(req.url)
+        const roomCode = searchParams.get('roomCode')
+
+        if (!roomCode) {
+            return new Response(
+                JSON.stringify({ error: 'Falta el código de sala' }),
+                {
+                    status: 400,
+                }
+            )
+        }
 
         const authHeader = req.headers.get('Authorization')
         const token = authHeader?.split(' ')[1]
@@ -331,6 +347,7 @@ export async function deleteRoom(req: Request) {
             { status: 200 }
         )
     } catch (error) {
+        console.error('Error en deleteRoom:', error) // Útil para ver el error real en consola
         return new Response(JSON.stringify({ error: 'Error al eliminar' }), {
             status: 500,
         })
@@ -340,6 +357,92 @@ export async function deleteRoom(req: Request) {
 // --------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------
 // Game Section ------------------------------------------------------------------------------
+
+// 1. api/game/plays -> Registrar jugada
+export async function Plays(req: Request) {
+    try {
+        const { roomCode, userId, choice } = await req.json()
+        const room = await Rooms.findOne({ where: { roomCode } })
+
+        if (!room)
+            return NextResponse.json(
+                { error: 'Sala no encontrada' },
+                { status: 404 }
+            )
+
+        // Asignar jugada según quién sea el jugador
+        if (room.player1Id === userId) room.p1Choice = choice
+        else if (room.player2Id === userId) room.p2Choice = choice
+
+        await room.save()
+
+        // Si ambos eligieron, devolvemos un flag para que el front sepa que puede comparar
+        const bothPlayed = room.p1Choice !== null && room.p2Choice !== null
+        return NextResponse.json({ success: true, bothPlayed, room })
+    } catch (error) {
+        return NextResponse.json({ error: 'Error en jugada' }, { status: 500 })
+    }
+}
+
+// 2. api/game/wichWins -> Procesar resultado de la ronda y sumar puntos
+// (Se llama cuando ambos jugaron)
+export async function WichWins(req: Request) {
+    const { roomCode } = await req.json()
+    const room = await Rooms.findOne({ where: { roomCode } })
+
+    if (!room || !room.p1Choice || !room.p2Choice) {
+        return NextResponse.json({ bothPlayed: false, room })
+    }
+
+    const p1Choice = room.p1Choice
+    const p2Choice = room.p2Choice
+
+    // ⏳ No borramos todavía, solo devolvemos las choices.
+    // Las borraremos después de un breve tiempo (2 segundos)
+    // para que el otro jugador tenga oportunidad de leerlas.
+    setTimeout(async () => {
+        const stillRoom = await Rooms.findOne({ where: { roomCode } })
+        if (
+            stillRoom &&
+            stillRoom.p1Choice === p1Choice &&
+            stillRoom.p2Choice === p2Choice
+        ) {
+            // Solo borramos si nadie ha hecho una nueva jugada en el medio
+            stillRoom.p1Choice = null
+            stillRoom.p2Choice = null
+            await stillRoom.save()
+        }
+    }, 2000)
+
+    return NextResponse.json({ bothPlayed: true, p1Choice, p2Choice, room })
+}
+
+// 3. api/game/endingTheRoom -> Sumar victoria y destruir sala
+export async function EndingTheRoom(req: Request) {
+    try {
+        const { roomCode, winnerId } = await req.json() // Usamos winnerId para ser claros
+
+        // 1. Sumar victoria al User ganador (si existe)
+        if (winnerId) {
+            const user = await User.findByPk(winnerId)
+            if (user) {
+                await user.increment('victories')
+                await user.reload()
+            }
+        }
+
+        // 2. Borrar la sala para liberar el código
+        await Rooms.destroy({ where: { roomCode } })
+
+        return NextResponse.json({ success: true })
+    } catch (error) {
+        console.error('Error al cerrar sala:', error)
+        return NextResponse.json(
+            { error: 'Error al cerrar sala' },
+            { status: 500 }
+        )
+    }
+}
 
 // --------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------
