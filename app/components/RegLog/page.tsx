@@ -45,7 +45,14 @@ export default function LogIn() {
             alert('Código incorrecto: ' + result.error)
         }
     }
+    const handleDemoLogin = () => {
+        localStorage.setItem('apiToken', 'demo-token')
+        localStorage.setItem('userEmail', 'demo@demo.com')
+        localStorage.setItem('userName', 'Demo Player')
+        localStorage.setItem('userId', '1000')
 
+        window.location.href = '/home'
+    }
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 p-4 font-sans text-white">
             <div className="w-full max-w-md bg-black border border-white/10 p-8 rounded-[2.5rem] shadow-2xl">
@@ -144,6 +151,13 @@ export default function LogIn() {
                                 className="w-full py-4 bg-green-600 rounded-2xl font-bold hover:bg-green-500 transition"
                             >
                                 {loading ? 'ENVIANDO...' : 'RECIBIR CÓDIGO'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDemoLogin}
+                                className="w-full mt-3 py-4 bg-gray-800 rounded-2xl font-bold hover:bg-gray-700 transition"
+                            >
+                                PROBAR DEMO
                             </button>
                         </div>
                     )}

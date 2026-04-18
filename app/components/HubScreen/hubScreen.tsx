@@ -21,6 +21,7 @@ export function HubScreen() {
     const router = useRouter()
     const { data: userData } = useMe()
 
+    const [isDemo, setIsDemo] = useState(false)
     const [tab, setTab] = useState<'global' | 'mis-salas'>('global')
     const [isCreating, setIsCreating] = useState(false)
     const [nuevaSalaNombre, setNuevaSalaNombre] = useState('')
@@ -45,15 +46,23 @@ export function HubScreen() {
     useEffect(() => {
         const storedId = localStorage.getItem('userId')
         const storedToken = localStorage.getItem('apiToken')
+
         if (storedId) setMiId(parseInt(storedId))
         if (!storedToken) router.push('/')
+
+        if (storedToken === 'demo-token') {
+            setIsDemo(true)
+        }
+
         fetchSalas()
+
         const interval = setInterval(fetchSalas, 4000)
         return () => clearInterval(interval)
     }, [router, fetchSalas])
 
     useEffect(() => {
         if (!miId) return
+
         const miSalaActiva = salas.find(
             (s) =>
                 (s.player1Id === miId || s.player2Id === miId) &&
@@ -61,14 +70,68 @@ export function HubScreen() {
                 s.player2Ready &&
                 s.status !== 'finished'
         )
+
         if (miSalaActiva && heMarcadoListo[miSalaActiva.roomCode]) {
             router.push(`/game/${miSalaActiva.roomCode}`)
         }
     }, [salas, miId, router, heMarcadoListo])
 
+    // =====================
+    // DEMO ROOMS (SOLO LOGICA)
+    // =====================
+
+    const CPU_SALA: Sala = {
+        id: -1,
+        roomCode: 'CPU-DEMO',
+        nameRoom: 'VS CPU',
+        player1Id: miId ?? 0,
+        player2Id: 999999,
+        player1Ready: false,
+        player2Ready: true,
+        status: 'waiting',
+        player1: { name: 'Tú' },
+        player2: { name: 'CPU' },
+    }
+
+    const SALA_DEMO_GLOBAL: Sala = {
+        id: -2,
+        roomCode: 'DEMO-ROOM',
+        nameRoom: 'Sala Ejemplo',
+        player1Id: 123,
+        player2Id: null,
+        player1Ready: false,
+        player2Ready: false,
+        status: 'waiting',
+        player1: { name: 'JugadorX' },
+    }
+
+    // =====================
+    // SALAS
+    // =====================
+
+    const salasGlobales = [
+        ...(isDemo ? [SALA_DEMO_GLOBAL] : []),
+        ...salas.filter(
+            (s) =>
+                s.player1Id !== miId &&
+                s.player2Id !== miId &&
+                s.status === 'waiting'
+        ),
+    ]
+
+    const misSalas = [
+        ...(isDemo ? [CPU_SALA] : []),
+        ...salas.filter((s) => s.player1Id === miId || s.player2Id === miId),
+    ]
+
+    // =====================
+    // HANDLERS
+    // =====================
+
     const handleCrearSalaReal = async () => {
         const token = localStorage.getItem('apiToken')
         if (!nuevaSalaNombre.trim()) return
+
         try {
             const res = await fetch('/api/rooms/create', {
                 method: 'POST',
@@ -78,6 +141,7 @@ export function HubScreen() {
                 },
                 body: JSON.stringify({ nameRoom: nuevaSalaNombre }),
             })
+
             if (res.ok) {
                 setIsCreating(false)
                 setNuevaSalaNombre('')
@@ -91,6 +155,9 @@ export function HubScreen() {
 
     const handleUnirse = async (roomCode: string) => {
         const token = localStorage.getItem('apiToken')
+
+        if (roomCode === 'DEMO-ROOM') return
+
         try {
             const res = await fetch('/api/rooms/join', {
                 method: 'POST',
@@ -100,6 +167,7 @@ export function HubScreen() {
                 },
                 body: JSON.stringify({ roomCode }),
             })
+
             if (res.ok) {
                 fetchSalas()
                 setTab('mis-salas')
@@ -110,8 +178,14 @@ export function HubScreen() {
     }
 
     const handleToggleReady = async (sala: Sala) => {
+        if (isDemo && sala.roomCode === 'CPU-DEMO') {
+            router.push('/game/CPU-DEMO')
+            return
+        }
+
         const esP1 = sala.player1Id === miId
         const nuevoEstado = esP1 ? !sala.player1Ready : !sala.player2Ready
+
         try {
             const res = await fetch('/api/rooms/update-ready', {
                 method: 'POST',
@@ -121,6 +195,7 @@ export function HubScreen() {
                     [esP1 ? 'player1Ready' : 'player2Ready']: nuevoEstado,
                 }),
             })
+
             if (res.ok) {
                 setHeMarcadoListo((prev) => ({
                     ...prev,
@@ -136,36 +211,32 @@ export function HubScreen() {
     const handleEliminarSala = async (roomCode: string) => {
         const token = localStorage.getItem('apiToken')
         if (!confirm('¿Seguro que quieres cerrar la sala?')) return
+
         try {
             const res = await fetch(`/api/rooms/delete?roomCode=${roomCode}`, {
                 method: 'DELETE',
                 headers: { Authorization: `Bearer ${token}` },
             })
+
             if (res.ok) fetchSalas()
         } catch (err) {
             console.error(err)
         }
     }
 
-    const salasGlobales = salas.filter(
-        (s) =>
-            s.player1Id !== miId &&
-            s.player2Id !== miId &&
-            s.status === 'waiting'
-    )
-    const misSalas = salas.filter(
-        (s) => s.player1Id === miId || s.player2Id === miId
-    )
+    // =====================
+    // UI (NO TOCADA)
+    // =====================
 
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-gray-950 p-4 text-white font-sans selection:bg-purple-500">
-            {/* MODAL CON FUENTES UNIFICADAS */}
             {isCreating && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 flex items-center justify-center p-4">
                     <div className="bg-gray-900 p-8 rounded-[2rem] w-full max-w-md border border-white/10 shadow-2xl">
                         <h2 className="text-3xl font-black mb-6 italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
                             NUEVA SALA
                         </h2>
+
                         <input
                             type="text"
                             placeholder="NOMBRE DE LA SALA..."
@@ -173,6 +244,7 @@ export function HubScreen() {
                             value={nuevaSalaNombre}
                             onChange={(e) => setNuevaSalaNombre(e.target.value)}
                         />
+
                         <div className="flex gap-4">
                             <button
                                 onClick={() => setIsCreating(false)}
@@ -180,6 +252,7 @@ export function HubScreen() {
                             >
                                 Cancelar
                             </button>
+
                             <button
                                 onClick={handleCrearSalaReal}
                                 className="flex-1 py-4 bg-purple-600 rounded-2xl font-black text-xs tracking-[0.2em] shadow-lg shadow-purple-500/20 hover:bg-purple-500 transition-all"
@@ -195,7 +268,7 @@ export function HubScreen() {
                 className="w-full max-w-3xl bg-black rounded-[3rem] shadow-[0_0_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col border border-white/5"
                 style={{ height: '800px' }}
             >
-                {/* TABS - ESTILO BOTONERA */}
+                {/* TABS */}
                 <div className="flex bg-gray-900/50 p-2 m-8 mb-4 rounded-3xl border border-white/5">
                     <button
                         onClick={() => setTab('global')}
@@ -217,6 +290,7 @@ export function HubScreen() {
                             <h2 className="text-gray-600 text-[10px] font-black uppercase tracking-[0.4em] ml-2 mb-6">
                                 Salas Disponibles
                             </h2>
+
                             {salasGlobales.map((sala) => (
                                 <div
                                     key={sala.id}
@@ -233,6 +307,7 @@ export function HubScreen() {
                                             </span>
                                         </p>
                                     </div>
+
                                     <button
                                         onClick={() =>
                                             handleUnirse(sala.roomCode)
@@ -249,11 +324,13 @@ export function HubScreen() {
                             <h2 className="text-gray-600 text-[10px] font-black uppercase tracking-[0.4em] ml-2">
                                 Tu Lobby Activo
                             </h2>
+
                             {misSalas.map((sala) => {
                                 const soyP1 = sala.player1Id === miId
                                 const miEstadoReady = soyP1
                                     ? sala.player1Ready
                                     : sala.player2Ready
+
                                 const otroJugadorListo = soyP1
                                     ? sala.player2Ready
                                     : sala.player1Ready

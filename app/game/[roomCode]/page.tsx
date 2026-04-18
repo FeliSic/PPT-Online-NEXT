@@ -10,23 +10,37 @@ interface PageProps {
 export default function Page({ params }: PageProps) {
     const resolvedParams = use(params)
     const roomCode = resolvedParams.roomCode
+    const isDemoMode = roomCode?.toUpperCase() === 'CPU-DEMO'
     const [roomData, setRoomData] = useState<any>(null)
     const [userId, setUserId] = useState<number | null>(null)
 
+    const demoRoom = {
+        roomCode: 'CPU-DEMO',
+        player1: {
+            id: userId ?? 1000,
+            name: 'Demo Player',
+        },
+        player2: {
+            id: 999999,
+            name: 'CPU',
+        },
+    }
+    const data = isDemoMode ? demoRoom : roomData
     useEffect(() => {
         const stored = localStorage.getItem('userId')
         if (stored) setUserId(Number(stored))
     }, [])
 
     useEffect(() => {
-        if (!roomCode) return
+        if (!roomCode || isDemoMode) return
+
         fetch(`/api/rooms/status?code=${roomCode}`)
             .then((res) => res.json())
             .then((data) => setRoomData(data))
             .catch(console.error)
-    }, [roomCode])
+    }, [roomCode, isDemoMode])
 
-    if (!roomData || userId === null) {
+    if (!data || userId === null) {
         return (
             <div className="min-h-screen flex items-center justify-center text-white">
                 Cargando sala...
@@ -35,18 +49,15 @@ export default function Page({ params }: PageProps) {
     }
 
     // Asegurar que player2Name exista
-    const player2Name = roomData.player2?.name || 'Esperando...'
-    const player2Id = roomData.player2?.id || null
-
     return (
         <main className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
             <GameScreen
                 roomCode={roomCode}
-                player1Name={roomData.player1.name}
-                player2Name={player2Name}
+                player1Name={data.player1?.name || 'Jugador 1'}
+                player2Name={data.player2?.name || 'Esperando...'}
                 currentUserId={userId}
-                player1Id={roomData.player1.id}
-                player2Id={player2Id}
+                player1Id={data.player1?.id}
+                player2Id={data.player2?.id || null}
             />
         </main>
     )

@@ -38,10 +38,19 @@ export function GameScreen({
     player1Id,
     player2Id,
 }: GameScreenProps) {
+    const isDemoMode = roomCode === 'CPU-DEMO'
     const isPlayer1 = currentUserId === player1Id
-    const myName = isPlayer1 ? player1Name : player2Name
-    const opponentName = isPlayer1 ? player2Name : player1Name
+    const myName = isDemoMode
+        ? 'Demo Player'
+        : isPlayer1
+          ? player1Name
+          : player2Name
 
+    const opponentName = isDemoMode
+        ? 'CPU'
+        : isPlayer1
+          ? player2Name
+          : player1Name
     const [selectedChoice, setSelectedChoice] = useState<Choice>(null)
     const [myScore, setMyScore] = useState(0)
     const [opponentScore, setOpponentScore] = useState(0)
@@ -102,6 +111,25 @@ export function GameScreen({
         setWaitingForOpponent(true)
         setResultMessage('⏳ Esperando al oponente...')
 
+        // =====================
+        // 🎮 DEMO MODE (CPU)
+        // =====================
+        if (isDemoMode) {
+            setTimeout(() => {
+                const cpuChoice = getRandomChoice()
+
+                resolveRound(
+                    isPlayer1 ? choice : cpuChoice,
+                    isPlayer1 ? cpuChoice : choice
+                )
+            }, 800) // pequeño delay para simular "pensamiento"
+
+            return
+        }
+
+        // =====================
+        // 🌐 ONLINE MODE
+        // =====================
         await fetch('/api/game/plays', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -112,6 +140,7 @@ export function GameScreen({
     }
 
     const startPolling = () => {
+        if (isDemoMode) return
         if (pollRef.current) clearInterval(pollRef.current)
         pollRef.current = setInterval(async () => {
             const res = await fetch('/api/game/wichWins', {
@@ -179,6 +208,9 @@ export function GameScreen({
     }
 
     const endGame = async (winnerId: number) => {
+        if (!isDemoMode) {
+            endGame(winnerId)
+        }
         await fetch('/api/game/endingTheRoom', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -210,6 +242,11 @@ export function GameScreen({
     }
 
     const canPlay = !waitingForOpponent && !gameOver
+
+    const getRandomChoice = (): Choice => {
+        const choices: Choice[] = ['rock', 'paper', 'scissors']
+        return choices[Math.floor(Math.random() * choices.length)]
+    }
 
     return (
         <div
